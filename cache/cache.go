@@ -1,7 +1,7 @@
 package cache
 
 import (
-	"fmt"
+	"sync"
 
 	"github.com/Prasang-money/searchSvc/models"
 )
@@ -9,21 +9,26 @@ import (
 // in this cache I am not handling the collision for simplicity
 // Using LRU for eviction policy
 type Cache struct {
-	data map[string]*Node
-	dll  *DoublyLinkedList
-	size int
-	cap  int
+	data  map[string]*Node
+	dll   *DoublyLinkedList
+	size  int
+	cap   int
+	mutex sync.RWMutex // Mutex for thread-safe operations
 }
 
 func NewCache(capacity int) *Cache {
 	return &Cache{
-		data: make(map[string]*Node),
-		cap:  capacity,
-		dll:  &DoublyLinkedList{},
+		data:  make(map[string]*Node),
+		cap:   capacity,
+		dll:   &DoublyLinkedList{},
+		mutex: sync.RWMutex{},
 	}
 }
 
 func (cache *Cache) Set(key string, value *models.CountryMetadata) {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+
 	if node, exists := cache.data[key]; exists {
 		node.value = value
 		// move existing node to front (no size change)
@@ -42,6 +47,7 @@ func (cache *Cache) Set(key string, value *models.CountryMetadata) {
 }
 
 func (cache *Cache) removeOldest() {
+	// No need for lock here as this is only called from Set which already holds the lock
 	if cache.dll.tail != nil {
 		delete(cache.data, cache.dll.tail.key)
 		cache.dll.remove(cache.dll.tail)
@@ -49,11 +55,17 @@ func (cache *Cache) removeOldest() {
 	}
 }
 
-func (cache *Cache) Get(key string) (models.CountryMetadata, error) {
+func (cache *Cache) Get(key string) (models.CountryMetadata, bool) {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+
 	if cache.data[key] == nil {
-		return models.CountryMetadata{}, fmt.Errorf("key not found")
+		return models.CountryMetadata{}, false
 	}
-	return *cache.data[key].value, nil
+	//fmt.Println("Cache hit for key:", key)
+	cache.dll.remove(cache.data[key])
+	cache.dll.addToFront(cache.data[key])
+	return *cache.data[key].value, true
 }
 
 type DoublyLinkedList struct {
